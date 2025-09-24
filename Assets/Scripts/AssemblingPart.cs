@@ -1,96 +1,98 @@
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
-/// <summary>
-/// Bu script, iki par�an�n birbirine tak�l�p s�k�lebildi�i bir montaj sistemi y�netir.
-/// Par�alar birle�ti�inde kilitlenir, iki elle tutuldu�unda ise ayr�l�r.
-/// </summary>
+[RequireComponent(typeof(XRGrabInteractable))]
 public class AssemblingPart : MonoBehaviour
 {
-    [Header("Montaj Ayarlar�")]
-    [Tooltip("Bu par�an�n ba�lanaca�� di�er par�a.")]
-    public AssemblingPart otherPart;
+    [Header("Yuva Ayarları (Sadece Yuva Olan Parçalar İçin)")]
+    [Tooltip("Bu parçaya başka bir parçanın kenetleneceği hedef nokta.")]
+    [SerializeField] private Transform snapPoint;
+    [Tooltip("Bu yuvaya sadece bu etikete sahip objeler kenetlenebilir.")]
+    [SerializeField] private string targetTag = "Pen";
 
-    [Tooltip("Bu par�a, di�er par�an�n HANG� NOKTASINA kilitlenecek? (Sadece bir par�ada ayarlanmal�, �rn: Kalemde)")]
-    public Transform attachPoint;
+    [Header("Takılma Ayarları (Sadece Takılan Parçalar İçin)")]
+    [Tooltip("Bu parçanın, bir yuvaya hizalanacak olan kendi referans noktası. Boş bırakılırsa, objenin merkezi kullanılır.")]
+    [SerializeField] private Transform selfSnapTarget; // YENİ EKLENEN ALAN
 
-    // --- Durum De�i�kenleri ---
+    // --- Durum Değişkenleri ---
     private bool isAttached = false;
-    private Transform originalParent;
-    private UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable grabInteractable;
+    private XRGrabInteractable grabInteractable;
     private Rigidbody rb;
 
-    void Start()
+    private void Awake()
     {
-        // Gerekli component'leri al ve sakla
-        grabInteractable = GetComponent<UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable>();
+        grabInteractable = GetComponent<XRGrabInteractable>();
         rb = GetComponent<Rigidbody>();
-        originalParent = transform.parent; // Ba�lang��taki parent'� kaydet
-
-        // Grab event'ine bir listener (dinleyici) ekle
-        grabInteractable.selectEntered.AddListener(OnGrabbed);
     }
-
-    // Bu obje tutuldu�unda XR Grab Interactable taraf�ndan �a�r�l�r
-    private void OnGrabbed(SelectEnterEventArgs args)
+    public void TryToAttach(AssemblingPart socketPart)
     {
-        // E�er bu par�a bir yere tak�l�ysa VE di�er par�a da �u an tutuluyorsa...
-        if (isAttached && otherPart.grabInteractable.isSelected)
+        if (isAttached || socketPart == null || !socketPart.CanAttach(this.tag))
         {
-            // �ki elle tutma durumu alg�land�, par�alar� ay�r!
-            Detach();
+            return;
         }
-    }
 
-    // Bu metot, di�er par�an�n trigger'�na girildi�inde �a�r�l�r.
-    public void TryToAttach(AssemblingPart partToAttachTo)
-    {
-        // E�er zaten tak�l� de�ilse ve do�ru par�aya temas ediyorsa
-        if (!isAttached && partToAttachTo == otherPart)
+        if (grabInteractable.isSelected)
         {
-            Attach(partToAttachTo);
+            grabInteractable.interactionManager.CancelInteractableSelection((IXRSelectInteractable)grabInteractable);
         }
-    }
+        grabInteractable.enabled = false;
 
-    // Par�alar� birbirine kilitleyen metot
-    private void Attach(AssemblingPart parentPart)
-    {
-        Debug.Log(gameObject.name + " tak�ld�!");
-
-        // Fiziksel �ak��malar� �nlemek i�in Rigidbody'i kinematik yap
+        // --- FİZİKSEL TİTREME DÜZELTMESİ ---
+        // Rigidbody'yi ve Collider'ı devre dışı bırakarak fiziksel çatışmayı tamamen bitiriyoruz.
         if (rb != null)
         {
+            // Rigidbody'yi Kinematik yap (dış kuvvetlerden etkilenmesin).
             rb.isKinematic = true;
+            // Rigidbody'nin tüm çarpışma kontrollerini durdur.
+            rb.detectCollisions = false;
+            // Rigidbody'yi tamamen uyku moduna al.
+            rb.Sleep();
         }
 
-        // Bu par�ay�, di�er par�an�n �ocu�u (child) yap
-        transform.SetParent(parentPart.transform);
+        // İsteğe bağlı: Eğer hala sorun devam ederse, bu satırı da ekleyebilirsiniz.
+        // GetComponent<Collider>().enabled = false;
 
-        // Di�er par�an�n belirledi�i montaj noktas�na kendini konumland�r ve d�nd�r
-        transform.position = parentPart.attachPoint.position;
-        transform.rotation = parentPart.attachPoint.rotation;
+        Transform targetSnapPoint = socketPart.snapPoint;
 
-        // Her iki par�an�n da "tak�l�" durumunu g�ncelle
+        if (selfSnapTarget != null)
+        {
+            Quaternion rotationDifference = Quaternion.Inverse(selfSnapTarget.localRotation);
+            transform.rotation = targetSnapPoint.rotation * rotationDifference;
+
+            Vector3 positionDifference = transform.position - selfSnapTarget.position;
+            transform.position = targetSnapPoint.position + positionDifference;
+        }
+        else
+        {
+            transform.position = targetSnapPoint.position;
+            transform.rotation = targetSnapPoint.rotation;
+        }
+
+        transform.SetParent(socketPart.transform);
+
         isAttached = true;
-        parentPart.isAttached = true;
+        socketPart.MarkAsAttached();
+
+        Debug.Log(this.name + ", " + socketPart.name + " yuvasına takıldı!");
+    }
+    // ... (kodun geri kalanı aynı) ...
+    public bool CanAttach(string enteringTag)
+    {
+        if (snapPoint == null || isAttached || enteringTag != targetTag)
+        {
+            return false;
+        }
+        return true;
     }
 
-    // Par�alar� birbirinden ay�ran metot
-    private void Detach()
+    public void MarkAsAttached()
     {
-        Debug.Log(gameObject.name + " ayr�ld�!");
+        isAttached = true;
+    }
 
-        // Rigidbody'i tekrar normal fizik kurallar�na d�nd�r
-        if (rb != null)
-        {
-            rb.isKinematic = false;
-        }
-
-        // Parent ili�kisini kopar ve ba�lang��taki parent'a geri d�n
-        transform.SetParent(originalParent);
-
-        // Her iki par�an�n da "tak�l�" durumunu g�ncelle
-        isAttached = false;
-        otherPart.isAttached = false;
+    public bool IsAlreadyAttached()
+    {
+        return isAttached;
     }
 }
